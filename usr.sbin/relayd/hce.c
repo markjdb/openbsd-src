@@ -79,11 +79,10 @@ hce_setup_events(void)
 	struct timeval	 tv;
 	struct table	*table;
 
-	if (!event_initialized(&env->sc_ev)) {
+	if (!event_initialized(&env->sc_ev))
 		evtimer_set(&env->sc_ev, hce_launch_checks, env);
-		bzero(&tv, sizeof(tv));
-		evtimer_add(&env->sc_ev, &tv);
-	}
+	bzero(&tv, sizeof(tv));
+	evtimer_add(&env->sc_ev, &tv);
 
 	if (env->sc_conf.flags & F_TLS) {
 		TAILQ_FOREACH(table, env->sc_tables, entry) {
@@ -97,6 +96,8 @@ hce_setup_events(void)
 			tls_config_insecure_noverifyname(table->tls_cfg);
 		}
 	}
+
+	env->sc_started = 1;
 }
 
 void
@@ -167,6 +168,7 @@ hce_launch_checks(int fd, short event, void *arg)
 				continue;
 			bcopy(&tv, &host->cte.tv_start,
 			    sizeof(host->cte.tv_start));
+			host->config_gen = env->sc_config_gen;
 			switch (table->conf.check) {
 			case CHECK_ICMP:
 				schedule_icmp(env, host);
@@ -239,6 +241,7 @@ hce_notify_done(struct host *host, enum host_error he)
 	st.up = host->up;
 	st.check_cnt = host->check_cnt;
 	st.retry_cnt = host->retry_cnt;
+	st.config_gen = host->config_gen;
 	st.he = he;
 	host->flags |= (F_CHECK_SENT|F_CHECK_DONE);
 	msg = host_error(he);
@@ -324,10 +327,12 @@ hce_dispatch_pfe(int fd, struct privsep_proc *p, struct imsg *imsg)
 			host->up = HOST_UNKNOWN;
 		break;
 	case IMSG_CTL_POLL:
-		evtimer_del(&env->sc_ev);
-		TAILQ_FOREACH(table, env->sc_tables, entry)
-			table->skipped = 0;
-		hce_launch_checks(-1, EV_TIMEOUT, env);
+		if (env->sc_started) {
+			evtimer_del(&env->sc_ev);
+			TAILQ_FOREACH(table, env->sc_tables, entry)
+				table->skipped = 0;
+			hce_launch_checks(-1, EV_TIMEOUT, env);
+		}
 		break;
 	default:
 		return (-1);
@@ -360,6 +365,7 @@ hce_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		hce_setup_events();
 		break;
 	case IMSG_CTL_RESET:
+		hce_disable_events();
 		config_getreset(env, imsg);
 		break;
 	default:
